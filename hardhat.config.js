@@ -51,6 +51,9 @@ module.exports = {
     deployer: {
       default: 0
     },
+    player: {
+      default: 1
+    }
   },
   mocha: {
     timeout: 500000, // 500 seconds max for running tests
