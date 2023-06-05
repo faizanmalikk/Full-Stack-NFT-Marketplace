@@ -8,7 +8,9 @@ const { developmentChains } = require("../../helper-hardhat-config")
 !developmentChains.includes(network.name)
     ? describe.skip
     : describe("NFT Marketplace Unit Tests", function () {
-        let basicNft, deployer, player, nftMarketplace
+
+
+        let basicNft, deployer, player, nftMarketplace, dummyContract
 
         const TOKEN_ID = 0
         const price = ethers.utils.parseEther('0.1')
@@ -21,6 +23,7 @@ const { developmentChains } = require("../../helper-hardhat-config")
             await deployments.fixture(["all"])
             basicNft = await ethers.getContract("BasicNFT", deployer)
             nftMarketplace = await ethers.getContract("NftMarketplace", deployer)
+            dummyContract = await ethers.getContract('DummyContract', player)
             await basicNft.mintNft()
             await basicNft.approve(nftMarketplace.address, TOKEN_ID)
 
@@ -107,12 +110,78 @@ const { developmentChains } = require("../../helper-hardhat-config")
                     expect(
                         await nftMarketplace.buyItems(basicNft.address, TOKEN_ID, { value: price })
                     ).to.emit("ItemBought")
-                    // const newOwner = await basicNft.ownerOf(TOKEN_ID)
-                    // const deployerProceeds = await nftMarketplace.getProceeds(deployer.address)
-                    // assert(newOwner.toString() == player.address)
-                    // assert(deployerProceeds.toString() == price.toString())
+                    const newOwner = await basicNft.ownerOf(TOKEN_ID)
+                    const deployerProceeds = await nftMarketplace.getProceeds(deployer.address)
+                    assert(newOwner.toString() == player.address)
+                    assert(deployerProceeds.toString() == price.toString())
                 })
 
+            })
+
+            describe("updateListing", function () {
+
+                it("must be owner and listed", async function () {
+                    await expect(
+                        nftMarketplace.updateListing(basicNft.address, TOKEN_ID, price)
+                    ).to.be.revertedWithCustomError(nftMarketplace, "NftMarketplace__NotListed")
+
+                    await nftMarketplace.listItem(basicNft.address, TOKEN_ID, price)
+
+                    nftMarketplace = nftMarketplace.connect(player)
+                    await expect(
+                        nftMarketplace.updateListing(basicNft.address, TOKEN_ID, price)
+                    ).to.be.revertedWithCustomError(nftMarketplace, "NftMarketplace__NotOwner")
+                })
+                it("reverts if new price is equal to 0", async function () {
+                    const newPrice = ethers.utils.parseEther('0')
+                    await nftMarketplace.listItem(basicNft.address, TOKEN_ID, price)
+                    expect(
+                        nftMarketplace.updateListing(basicNft.address, TOKEN_ID, newPrice)
+                    ).to.be.revertedWith('Price must be above 0')
+                })
+                it("updates the price of the item", async function () {
+                    const newPrice = ethers.utils.parseEther('0.2')
+                    await nftMarketplace.listItem(basicNft.address, TOKEN_ID, price)
+                    await nftMarketplace.updateListing(basicNft.address, TOKEN_ID, newPrice)
+                    const listings = await nftMarketplace.getListings(basicNft.address, TOKEN_ID)
+                    assert.equal(listings.price.toString(), newPrice.toString())
+                })
+            })
+            describe("withdraw", function () {
+
+                it("don't allow 0 withdraw proceeds", async function () {
+                    await expect(nftMarketplace.withdrawProceeds(deployer.address)).to.be.revertedWithCustomError(nftMarketplace, 'NftMarketplace__NoProceedsFound')
+                })
+                it("withdraws proceeds", async function () {
+                    await nftMarketplace.listItem(basicNft.address, TOKEN_ID, price)
+                    nftMarketplace = nftMarketplace.connect(player)
+                    await nftMarketplace.buyItems(basicNft.address, TOKEN_ID, { value: price })
+                    nftMarketplace = nftMarketplace.connect(deployer)
+
+                    const deployerProceedsBefore = await nftMarketplace.getProceeds(deployer.address)
+                    const deployerBalanceBefore = await deployer.getBalance()
+                    const txResponse = await nftMarketplace.withdrawProceeds(deployer.address)
+                    const transactionReceipt = await txResponse.wait(1)
+                    const { gasUsed, effectiveGasPrice } = transactionReceipt
+                    const gasCost = gasUsed.mul(effectiveGasPrice)
+                    const deployerBalanceAfter = await deployer.getBalance()
+
+                    assert(
+                        deployerBalanceAfter.add(gasCost).toString() ==
+                        deployerProceedsBefore.add(deployerBalanceBefore).toString()
+                    )
+                })
+
+                // Test case for the withdrawProceeds function when the transaction fails
+                it('should revert when the transaction fails', async function () {
+                    await nftMarketplace.listItem(basicNft.address, TOKEN_ID, price);
+                    nftMarketplace = nftMarketplace.connect(player);
+                    await nftMarketplace.buyItems(basicNft.address, TOKEN_ID, { value: price });
+                    nftMarketplace = nftMarketplace.connect(deployer);
+                  
+                    await expect(nftMarketplace.withdrawProceeds(dummyContract.address)).to.be.revertedWithCustomError(nftMarketplace, "NftMarketplace__TransactionFailed");
+                  });
+                  
             })
         })
 
